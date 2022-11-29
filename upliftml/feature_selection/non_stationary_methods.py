@@ -1,9 +1,8 @@
 from datetime import datetime
-from typing import Dict, Tuple
+from typing import Dict, Tuple, Any
 
 import pandas as pd
 import pyspark
-from pysparkling import H2OContext
 
 from upliftml.feature_selection.stationary_methods import (
     DivergenceFilter,
@@ -15,6 +14,7 @@ from upliftml.feature_selection.utils import (
     discretizing,
     get_data_between_dates,
     linear_weighting,
+    min_max_normalization
 )
 
 
@@ -57,7 +57,7 @@ class FeatureImportanceOverTime:
         durf_dict: dict = None,
         n_samples: int = -1,
         n_repeats: int = 3,
-        h2o_context: H2OContext = None,
+        h2o_context: Any = None,
     ):
         """
         Initialize FeatureImportanceOverTime
@@ -119,6 +119,43 @@ class FeatureImportanceOverTime:
 
         feature_importance_scores = pd.DataFrame()
         features_variables_importances = {}  # type: Dict[str, float]
+
+        if self.method == "divergence":
+            divergence_filter = DivergenceFilter(
+                target_colname=self.target_colname,
+                treatment_colname=self.treatment_colname,
+                treatment_value=self.treatment_value,
+                control_value=self.control_value,
+                n_bins=-1,
+                method=self.divergence_method,
+                smooth=self.smooth
+            )
+        elif self.method == "permutation":
+            permutation_urf = PermutationUpliftRandomForestWrapper(
+                durf_dict=self.durf_dict,
+                factor_list=self.factor_list,
+                target_colname=self.target_colname,
+                treatment_colname=self.treatment_colname,
+                n_samples=self.n_samples,
+                n_repeats=self.n_repeats
+            )
+        elif self.method == "niv":
+            niv = NetInformationValueFilter(
+                target_colname=self.target_colname,
+                treatment_colname=self.treatment_colname,
+                treatment_value=self.treatment_value,
+                control_value=self.control_value,
+                n_bins=-1
+            )
+        elif self.method == "uc":
+            uplift_curve = UpliftCurveFilter(
+                target_colname=self.target_colname,
+                treatment_colname=self.treatment_colname,
+                treatment_value=self.treatment_value,
+                control_value=self.control_value,
+                n_bins=-1
+            )
+
         for train_date in dates:
             df_at_t = get_data_between_dates(df, train_date[0], train_date[1], date_col=self.date_col)
             df_at_t = df_at_t.drop(*drop_columns_fs)
@@ -128,47 +165,16 @@ class FeatureImportanceOverTime:
                 str_date = train_date[1].strftime(self.date_format)
 
             if self.method == "divergence":
-                divergence_filter = DivergenceFilter(
-                    target_colname=self.target_colname,
-                    treatment_colname=self.treatment_colname,
-                    treatment_value=self.treatment_value,
-                    control_value=self.control_value,
-                    n_bins=self.n_bins,
-                    method=self.divergence_method,
-                    smooth=self.smooth,
-                )
                 scores_at_t, variables_at_t = divergence_filter.calculate_feature_importance(df_at_t, features)
                 features_variables_importances.update({str_date: variables_at_t})
             elif self.method == "permutation":
-                permutation_urf = PermutationUpliftRandomForestWrapper(
-                    durf_dict=self.durf_dict,
-                    factor_list=self.factor_list,
-                    target_colname=self.target_colname,
-                    treatment_colname=self.treatment_colname,
-                    n_samples=self.n_samples,
-                    n_repeats=self.n_repeats,
-                )
                 scores_at_t = permutation_urf.calculate_feature_importance(
                     self.h2o_context.asH2OFrame(df_at_t), features
                 )
             elif self.method == "niv":
-                niv = NetInformationValueFilter(
-                    target_colname=self.target_colname,
-                    treatment_colname=self.treatment_colname,
-                    treatment_value=self.treatment_value,
-                    control_value=self.control_value,
-                    n_bins=self.n_bins,
-                )
                 scores_at_t, variables_at_t = niv.calculate_feature_importance(df_at_t, features)
                 features_variables_importances.update({str_date: variables_at_t})
             elif self.method == "uc":
-                uplift_curve = UpliftCurveFilter(
-                    target_colname=self.target_colname,
-                    treatment_colname=self.treatment_colname,
-                    treatment_value=self.treatment_value,
-                    control_value=self.control_value,
-                    n_bins=self.n_bins,
-                )
                 scores_at_t, variables_at_t = uplift_curve.calculate_feature_importance(df_at_t, features)
                 features_variables_importances.update({str_date: variables_at_t})
             else:
@@ -184,6 +190,8 @@ class FeatureImportanceOverTime:
             else:
                 feature_importance_scores = feature_importance_scores.merge(scores_at_t, on="feature")
 
+        # Min-Max Normalization
+        feature_importance_scores.iloc[:, 1:] = min_max_normalization(feature_importance_scores)
         # Linear Weighting
         feature_importance_scores = linear_weighting(feature_importance_scores, time_steps)
         feature_importance_scores.reset_index(drop=True, inplace=True)
