@@ -106,7 +106,7 @@ class FeatureImportanceOverTime:
             time_steps (int): Number of time steps
             dates (list): List of dates tuples
             features (list): List of feature names, which are columns in the dataframe
-            drop_columns_fs (list): List of features to drop (such as treatment or response)
+            drop_columns_fs (list): List of features not to use for feature selection
 
         Returns:
             A tuple, containing:
